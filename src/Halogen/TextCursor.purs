@@ -19,6 +19,7 @@ import Web.Util.TextCursor (Direction(None), TextCursor(TextCursor), content)
 import Web.Util.TextCursor.Element (setTextCursor, textCursor, validate')
 import Web.Util.TextCursor.Element.Type (read, readEventTarget)
 import Data.Maybe (Maybe(..))
+import Data.Symbol (SProxy(..))
 import Halogen as H
 import Halogen.Aff (awaitBody, runHalogenAff)
 import Halogen.HTML as HH
@@ -54,7 +55,7 @@ textCursorComponent :: forall m.
   TCInputType ->
   H.Component HH.HTML Query TextCursor TextCursor m
 textCursorComponent typ =
-  H.lifecycleComponent
+  H.component
     { initialState: identity
     , render
     , eval
@@ -64,7 +65,7 @@ textCursorComponent typ =
     }
   where
     label = H.RefLabel "textcursor-component" :: H.RefLabel
-    render :: TextCursor -> H.ComponentHTML Query
+    render :: TextCursor -> H.ComponentHTML Query () m
     render = case toInputType typ of
       Nothing -> \tc ->
         HH.textarea
@@ -82,7 +83,7 @@ textCursorComponent typ =
           , HE.onFocus (HE.input (Update <<< FocusEvent.toEvent))
           ]
 
-    eval :: Query ~> H.ComponentDSL TextCursor Query TextCursor m
+    eval :: Query ~> H.HalogenM TextCursor Query () TextCursor m
     eval (Init next) = do
       tc <- H.get
       eval (FromOutside tc next)
@@ -104,11 +105,13 @@ data DemoQuery a
   = Set TextCursor a
   | Receive TextCursor a
 
+type DemoSlots = ( tc :: H.Slot Query TextCursor Unit )
+
 demo :: forall m.
   MonadEffect m =>
   H.Component HH.HTML DemoQuery Unit Void m
 demo =
-  H.lifecycleParentComponent
+  H.component
     { initialState: const nov
     , render
     , eval
@@ -130,10 +133,10 @@ demo =
       TextCursor r <- H.get
       H.liftEffect $ log $ unsafeCoerce [r.before, r.selected, r.after]
 
-    render :: TextCursor -> H.ParentHTML DemoQuery Query Unit m
-    render tc = HH.slot unit com tc (HE.input Receive)
+    render :: TextCursor -> H.ComponentHTML DemoQuery DemoSlots m
+    render tc = HH.slot (SProxy :: SProxy "tc") unit com tc (HE.input Receive)
 
-    eval :: DemoQuery ~> H.ParentDSL TextCursor DemoQuery Query Unit Void m
+    eval :: DemoQuery ~> H.HalogenM TextCursor DemoQuery DemoSlots Void m
     eval (Set tc a) = a <$ do
       update tc
     eval (Receive tc a) = a <$ do

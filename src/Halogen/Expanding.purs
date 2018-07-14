@@ -30,6 +30,7 @@ import Data.Foldable (traverse_)
 import Data.Int (ceil)
 import Data.Maybe (Maybe(..), isJust)
 import Data.String (Pattern(..), stripPrefix, stripSuffix)
+import Data.Symbol (SProxy(..))
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Halogen (AttrName(..))
@@ -91,7 +92,7 @@ expandingComponent :: forall m.
   Settings ->
   H.Component HH.HTML Query TextCursor TextCursor m
 expandingComponent settings =
-  H.lifecycleComponent
+  H.component
     { initialState: Tuple (ceil settings.min)
     , render
     , eval
@@ -101,7 +102,7 @@ expandingComponent settings =
     }
   where
     label = H.RefLabel "textcursor-component" :: H.RefLabel
-    render :: Tuple Int TextCursor -> H.ComponentHTML Query
+    render :: Tuple Int TextCursor -> H.ComponentHTML Query () m
     render (Tuple w v) = HH.input
       [ HP.ref label -- give it a label
       , HP.value (content v) -- set the value
@@ -116,7 +117,7 @@ expandingComponent settings =
 
     withEl h = H.getRef label >>= obtainInputTC >>> traverse_ h
 
-    eval :: Query ~> H.ComponentDSL (Tuple Int TextCursor) Query TextCursor m
+    eval :: Query ~> H.HalogenM (Tuple Int TextCursor) Query () TextCursor m
     -- When an input event occurs, get the value and notify the parent
     eval (NoOp next) = pure next
     eval (PreventDefault e next) = do
@@ -153,11 +154,13 @@ data DemoQuery a
   = Reset TextCursor a
   | Receive TextCursor a
 
+type DemoSlots = ( tc :: H.Slot Query TextCursor Unit )
+
 demo :: forall m.
   MonadEffect m =>
   H.Component HH.HTML DemoQuery Unit Void m
 demo =
-  H.lifecycleParentComponent
+  H.component
     { initialState: const nov
     , render
     , eval
@@ -179,10 +182,10 @@ demo =
       TextCursor r <- H.get
       H.liftEffect $ log $ unsafeCoerce [r.before, r.selected, r.after]
 
-    render :: TextCursor -> H.ParentHTML DemoQuery Query Unit m
-    render s = HH.div_ [HH.slot unit com s (HE.input Receive)]
+    render :: TextCursor -> H.ComponentHTML DemoQuery DemoSlots m
+    render s = HH.div_ [HH.slot (SProxy :: SProxy "tc") unit com s (HE.input Receive)]
 
-    eval :: DemoQuery ~> H.ParentDSL TextCursor DemoQuery Query Unit Void m
+    eval :: DemoQuery ~> H.HalogenM TextCursor DemoQuery DemoSlots Void m
     eval (Reset v a) = a <$ do
       update v
     eval (Receive v a) = a <$ do
