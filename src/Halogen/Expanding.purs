@@ -8,33 +8,27 @@ import Prelude
 
 import Control.Bind (bindFlipped)
 import Control.Comonad (extract)
-import Control.Monad.Eff (Eff)
-import Control.Monad.Eff.AVar (AVAR)
-import Control.Monad.Eff.Class (class MonadEff)
-import Control.Monad.Eff.Console (CONSOLE, log)
-import Control.Monad.Eff.Exception (EXCEPTION)
-import Control.Monad.Eff.Ref (REF)
-import Control.Monad.Except (runExcept)
-import DOM (DOM)
-import DOM.Event.Event (preventDefault)
-import DOM.Event.Types (Event, keyboardEventToEvent)
-import DOM.HTML (window)
-import DOM.HTML.HTMLInputElement (setValue, setWidth, value)
-import DOM.HTML.Types (HTMLInputElement, htmlDocumentToDocument, htmlElementToElement, htmlInputElementToHTMLElement, readHTMLInputElement)
-import DOM.HTML.Window (document)
-import DOM.Node.Document (createElement)
-import DOM.Node.Element (clientWidth, setAttribute)
-import DOM.Node.Node (appendChild, parentNode, removeChild, setTextContent)
-import DOM.Node.Types (Element, elementToNode)
-import DOM.Util.TextCursor (Direction(..), TextCursor(..), content, empty)
-import DOM.Util.TextCursor.Element (TextCursorElement, setTextCursor, textCursor)
-import DOM.Util.TextCursor.Element.Type (read')
+import Effect (Effect)
+import Effect.Class (class MonadEffect)
+import Effect.Console (log)
+import Web.Event.Event (Event)
+import Web.HTML (window)
+import Web.HTML.HTMLInputElement as HInput
+import Web.HTML.HTMLInputElement (HTMLInputElement)
+import Web.HTML.HTMLDocument (toDocument) as HTMLDocument
+import Web.HTML.HTMLElement (toElement) as HTMLElement
+import Web.HTML.Window (document)
+import Web.DOM.Document (createElement)
+import Web.DOM.Node (appendChild, parentNode, removeChild, setTextContent)
+import Web.DOM.Element (Element)
+import Web.DOM.Element as Element
+import Web.Util.TextCursor (Direction(..), TextCursor(..), content, empty)
+import Web.Util.TextCursor.Element (TextCursorElement, setTextCursor, textCursor)
+import Web.Util.TextCursor.Element.Type (read)
 import Data.Bifunctor (lmap)
-import Data.Either (hush)
 import Data.Foldable (traverse_)
-import Data.Foreign (Foreign)
 import Data.Int (ceil)
-import Data.Maybe (Maybe(..), isJust, isNothing)
+import Data.Maybe (Maybe(..), isJust)
 import Data.String (Pattern(..), stripPrefix, stripSuffix)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
@@ -54,27 +48,27 @@ data Query a
   | NoOp a
   | Update a
 
-foreign import computedStyle :: forall eff. Element -> Eff ( dom :: DOM | eff ) String
-foreign import fixStyle :: forall eff. Element -> Eff ( dom :: DOM | eff ) Unit
+foreign import computedStyle :: Element -> Effect String
+foreign import fixStyle :: Element -> Effect Unit
 
 -- | Closely based on https://stackoverflow.com/a/7168967
-testWidth :: forall eff. HTMLInputElement -> String -> Eff ( dom :: DOM | eff ) (Maybe Number)
+testWidth :: HTMLInputElement -> String -> Effect (Maybe Number)
 testWidth input val = do
-  tmp <- createElement "div" <<< htmlDocumentToDocument =<< document =<< window
-  let tmpNode = elementToNode tmp
+  tmp <- createElement "div" <<< HTMLDocument.toDocument =<< document =<< window
+  let tmpNode = Element.toNode tmp
 
   setTextContent val tmpNode
 
-  let inputHTMLElement = htmlInputElementToHTMLElement input
-  let inputElement = htmlElementToElement inputHTMLElement
-  let inputNode = elementToNode inputElement
+  let inputHTMLElement = HInput.toHTMLElement input
+  let inputElement = HTMLElement.toElement inputHTMLElement
+  let inputNode = Element.toNode inputElement
   styl <- computedStyle inputElement
-  setAttribute "style" styl tmp
+  Element.setAttribute "style" styl tmp
   fixStyle tmp
 
   parentNode inputNode >>= traverse \parNode -> do
     _ <- appendChild tmpNode parNode
-    width <- clientWidth tmp
+    width <- Element.clientWidth tmp
     _ <- removeChild tmpNode parNode
     pure width
 
@@ -86,14 +80,14 @@ type Settings =
   }
 
 
-obtainInput :: Maybe Foreign -> Maybe HTMLInputElement
-obtainInput = bindFlipped (readHTMLInputElement >>> runExcept >>> hush)
+obtainInput :: Maybe Element -> Maybe HTMLInputElement
+obtainInput = bindFlipped HInput.fromElement
 
-obtainInputTC :: Maybe Foreign -> Maybe TextCursorElement
-obtainInputTC = bindFlipped (read' >>> runExcept >>> hush)
+obtainInputTC :: Maybe Element -> Maybe TextCursorElement
+obtainInputTC = bindFlipped read
 
-expandingComponent :: forall m eff.
-  MonadEff ( dom :: DOM | eff ) m =>
+expandingComponent :: forall m.
+  MonadEffect m =>
   Settings ->
   H.Component HH.HTML Query TextCursor TextCursor m
 expandingComponent settings =
@@ -128,30 +122,30 @@ expandingComponent settings =
     eval (PreventDefault e next) = do
       v <- H.gets extract
       withEl \el ->
-        H.liftEff $ setTextCursor v el
+        H.liftEffect $ setTextCursor v el
       eval next
     eval (Raising next) = next <$ do
       v <- H.gets extract
       withEl \el -> do
-        v' <- H.liftEff $ textCursor el
-        H.liftEff $ setTextCursor v el
+        v' <- H.liftEffect $ textCursor el
+        H.liftEffect $ setTextCursor v el
         H.raise v'
     -- Set the input value in state and update the size
     eval (Set v next) = do
-      withEl \el -> H.liftEff $ setTextCursor v el
+      withEl \el -> H.liftEffect $ setTextCursor v el
       H.modify (_ $> v) *> eval (Update next)
     -- Update the size of the input to correspond to the value it will have
     -- on the next render
     eval (Update next) = next <$ do
       H.getRef label >>= obtainInput >>> traverse_ \el -> do
         v <- H.gets extract
-        H.liftEff (testWidth el (content v)) >>= traverse_ \w' -> do
+        H.liftEffect (testWidth el (content v)) >>= traverse_ \w' -> do
           let
             w = ceil
               $ max settings.min
               $ min settings.max
               $ w' + settings.padding
-          H.liftEff $ setWidth w el
+          H.liftEffect $ HInput.setWidth w el
           H.modify (lmap (const w))
       pure unit
 
@@ -159,8 +153,8 @@ data DemoQuery a
   = Reset TextCursor a
   | Receive TextCursor a
 
-demo :: forall m eff.
-  MonadEff ( dom :: DOM, console :: CONSOLE | eff ) m =>
+demo :: forall m.
+  MonadEffect m =>
   H.Component HH.HTML DemoQuery Unit Void m
 demo =
   H.lifecycleParentComponent
@@ -183,7 +177,7 @@ demo =
     update = H.put >>> (_ *> inform)
     inform = do
       TextCursor r <- H.get
-      H.liftEff $ log $ unsafeCoerce [r.before, r.selected, r.after]
+      H.liftEffect $ log $ unsafeCoerce [r.before, r.selected, r.after]
 
     render :: TextCursor -> H.ParentHTML DemoQuery Query Unit m
     render s = HH.div_ [HH.slot unit com s (HE.input Receive)]
@@ -199,5 +193,5 @@ demo =
       when (isJust $ stripSuffix (Pattern "reset") $ content v) do
         eval (Reset empty unit)
 
-main :: forall e. Eff ( avar :: AVAR, ref :: REF, exception :: EXCEPTION, dom :: DOM, console :: CONSOLE | e ) Unit
+main :: Effect Unit
 main = runHalogenAff $ awaitBody >>= runUI demo unit
