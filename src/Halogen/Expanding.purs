@@ -20,6 +20,7 @@ import Halogen as H
 import Halogen.Aff (awaitBody, runHalogenAff)
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
+import Halogen.HTML.Properties (InputType(..))
 import Halogen.HTML.Properties as HP
 import Halogen.VDom.Driver (runUI)
 import Prim.Row as Row
@@ -69,6 +70,9 @@ modify_ f = void $ modify f
 blur :: Free Query Unit
 blur = modify_ (toString >>> Blurred)
 
+notify :: Free Query Unit
+notify = liftF (Raising Nothing unit)
+
 qRaising :: forall a. Maybe Boolean -> a -> Free Query a
 qRaising mb a = liftF (Raising mb a)
 
@@ -86,7 +90,7 @@ testWidth input val = do
   let inputElement = HTMLElement.toElement inputHTMLElement
   let inputNode = Element.toNode inputElement
   styl <- computedStyle inputElement
-  Element.setAttribute "style" (styl <> ";width:auto;position:static;") tmp
+  Element.setAttribute "style" (styl <> ";width:auto;position:static;white-space:pre") tmp
 
   parentNode inputNode >>= traverse \parNode -> do
     _ <- appendChild tmpNode parNode
@@ -118,6 +122,10 @@ data Blurry
   | Focused TextCursor
 
 derive instance eqBlurry :: Eq Blurry
+
+instance showBlurry :: Show Blurry where
+  show (Blurred s) = "(Blurred " <> show s <> ")"
+  show (Focused tc) = "(Focused " <> show tc <> ")"
 
 isBlurred :: Blurry -> Boolean
 isBlurred (Blurred _) = true
@@ -182,6 +190,7 @@ expandingComponent =
     render s = HH.input
       [ HP.ref label -- give it a label
       , HP.value (toString s.value) -- set the value
+      , HP.type_ InputText
       , HP.attr (AttrName "style") ("width: " <> show s.size <> "px") -- set the width
       , HE.onInput (HE.input_ (qRaising Nothing)) -- notify parent on input events
       , HE.onInput (HE.input_ (qRaising Nothing))
