@@ -2,12 +2,14 @@ module Halogen.Expanding where
 
 import Prelude
 
+import CSS as CSS
 import Control.Bind (bindFlipped)
 import Control.Monad.Free (Free, foldFree, liftF)
 import Control.Monad.State (class MonadState)
+import Data.Exists (Exists, mkExists, runExists)
 import Data.Foldable (traverse_)
-import Data.Int (ceil)
 import Data.Maybe (Maybe(..))
+import Data.Number (fromString)
 import Data.String (Pattern(..), contains)
 import Data.Symbol (class IsSymbol, SProxy(..))
 import Data.Traversable (traverse)
@@ -15,10 +17,10 @@ import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Class (class MonadEffect)
 import Effect.Class.Console (log)
-import Halogen (AttrName(..))
 import Halogen as H
 import Halogen.Aff (awaitBody, runHalogenAff)
 import Halogen.HTML as HH
+import Halogen.HTML.CSS as HCSS
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties (InputType(..))
 import Halogen.HTML.Properties as HP
@@ -78,6 +80,15 @@ qRaising mb a = liftF (Raising mb a)
 
 foreign import computedStyle :: Element -> Effect String
 
+styleReset :: String
+styleReset = """;
+max-width: none;
+min-width: 0px;
+width: auto;
+position: static;
+white-space: pre;
+"""
+
 -- | Closely based on https://stackoverflow.com/a/7168967
 testWidth :: HTMLInputElement -> String -> Effect (Maybe Number)
 testWidth input val = do
@@ -90,24 +101,21 @@ testWidth input val = do
   let inputElement = HTMLElement.toElement inputHTMLElement
   let inputNode = Element.toNode inputElement
   styl <- computedStyle inputElement
-  Element.setAttribute "style" (styl <> ";width:auto;position:static;white-space:pre") tmp
 
   parentNode inputNode >>= traverse \parNode -> do
     _ <- appendChild tmpNode parNode
+    Element.setAttribute "style" (styl <> styleReset) tmp
     width <- Element.clientWidth tmp
+    log =<< computedStyle tmp
     _ <- removeChild tmpNode parNode
     pure width
 
 type Settings =
-  { focused ::
-    { min :: Number
-    , max :: Number
-    , padding :: Number
-    }
-  , blurred ::
-    { min :: Number
-    , max :: Number
-    , padding :: Number
+  { classes :: Array H.ClassName
+  , style :: CSS.CSS
+  , padding ::
+    { focused :: Exists CSS.Size
+    , blurred :: Exists CSS.Size
     }
   }
 
@@ -149,7 +157,7 @@ fromTC false tc = Blurred (content tc)
 type State =
   { value :: Blurry
   , focus :: Boolean
-  , size :: Int
+  , size :: Number
   , settings :: Settings
   }
 
@@ -172,7 +180,7 @@ expandingComponent =
     { initialState: \(Tuple settings value) ->
       { settings, value
       , focus: false
-      , size: ceil settings.blurred.min
+      , size: 0.0
       }
     , render
     , eval
@@ -191,7 +199,15 @@ expandingComponent =
       [ HP.ref label -- give it a label
       , HP.value (toString s.value) -- set the value
       , HP.type_ InputText
-      , HP.attr (AttrName "style") ("width: " <> show s.size <> "px") -- set the width
+      , HP.classes s.settings.classes
+      , HCSS.style do
+          s.settings.style
+          let
+            padding = if s.focus
+              then s.settings.padding.focused
+              else s.settings.padding.blurred
+          CSS.width $ padding # runExists \(CSS.Size sz) -> CSS.Size $
+            CSS.fromString ("calc(" <> show s.size <> "px + ") <> sz <> CSS.fromString ")"
       , HE.onInput (HE.input_ (qRaising Nothing)) -- notify parent on input events
       , HE.onInput (HE.input_ (qRaising Nothing))
       , HE.onClick (HE.input_ (qRaising Nothing))
@@ -230,7 +246,8 @@ expandingComponent =
       resetTo v
       when (mv' /= Just v) (mv' # traverse_ H.raise)
     eval1 (Input (Tuple settings v) next) = do
-      guardedModify (SProxy :: SProxy "settings") settings
+      --guardedModify (SProxy :: SProxy "settings") settings
+      H.modify_ _ { settings = settings }
       eval1 (Set v next)
     -- Set the input value in state and update the size
     eval1 (Set v next) = do
@@ -241,21 +258,15 @@ expandingComponent =
     -- on the next render
     eval1 (Resize next) = next <$ do
       H.getRef label >>= obtainInput >>> traverse_ \el -> do
-        st <- H.get
-        let sets = if st.focus then st.settings.focused else st.settings.blurred
-        H.liftEffect (testWidth el (toString st.value)) >>= traverse_ \w' -> do
-          let
-            w = ceil
-              $ max sets.min
-              $ min sets.max
-              $ w' + sets.padding
+        v <- H.gets _.value
+        H.liftEffect (testWidth el (toString v)) >>= traverse_ \w -> do
           guardedModify (SProxy :: SProxy "size") w
-          H.liftEffect $ HInput.setWidth w el
 
 data DemoQuery a
   = Reset Blurry a
   | Receive Blurry a
   | Focus a
+  | FontSize Number a
 
 type DemoSlots = ( tc :: H.Slot (Free Query) Blurry Unit )
 
@@ -264,7 +275,10 @@ demo :: forall m.
   H.Component HH.HTML DemoQuery Unit Void m
 demo =
   H.component
-    { initialState: const nov
+    { initialState: const
+      { value: nov
+      , fontSize: 15.0
+      }
     , render
     , eval
     , receiver: const Nothing
@@ -278,43 +292,49 @@ demo =
       , after: "after"
       , direction: None
       }
-    settings =
-      { focused:
-        { min: 100.0
-        , max: 300.0
-        , padding: 25.0
+    settings s =
+      { classes: []
+      , padding:
+        { focused: mkExists $ 2.0 # CSS.em
+        , blurred: mkExists $ 1.0 # CSS.em
         }
-      , blurred:
-        { min: 50.0
-        , max: 300.0
-        , padding: 10.0
-        }
+      , style: do
+          let focus = isFocused s.value
+          CSS.minWidth $ if focus then 7.0 # CSS.em else 3.0 # CSS.em
+          CSS.maxWidth $ if focus then 24.0 # CSS.em else 20.0 # CSS.em
+          CSS.fontSize $ s.fontSize # CSS.px
+          CSS.key (CSS.fromString "text-overflow") "ellipsis"
       }
 
-    update = H.put >>> (_ *> inform)
+    update v = H.modify_ _ { value = v } *> inform
     inform =
-      H.get >>= log <<< case _ of
+      H.gets _.value >>= log <<< case _ of
         Blurred s -> s
         Focused (TextCursor r) ->
           unsafeCoerce [r.before, r.selected, r.after]
 
-    render :: Blurry -> H.ComponentHTML DemoQuery DemoSlots m
+    render :: { value :: Blurry, fontSize :: Number } -> H.ComponentHTML DemoQuery DemoSlots m
     render s = HH.div_
-      [ HH.slot (SProxy :: SProxy "tc") unit
-          expandingComponent (Tuple settings s) (HE.input Receive)
+      [ HH.input
+        [ HP.type_ InputRange, HP.value (show s.fontSize)
+        , HP.min 5.0, HP.max 50.0
+        , HE.onValueInput \v -> FontSize <$> (fromString v :: Maybe Number) <@> unit
+        ]
+      , HH.br_
+      , HH.slot (SProxy :: SProxy "tc") unit expandingComponent
+          ((Tuple <$> settings <*> _.value) s)
+          (HE.input Receive)
       , HH.button [ HE.onClick (HE.input_ Focus) ] [ HH.text "Focus" ]
-      , HH.p_ [ HH.text "Write some text! Try these keywords:" ]
-      , HH.ul_ $ HH.li_ <<< pure <<< HH.text <$>
-        [ "select all", "stop", "reset", "blur", "stay here" ]
       ]
 
-    eval :: DemoQuery ~> H.HalogenM Blurry DemoQuery DemoSlots Void m
+    eval :: DemoQuery ~> H.HalogenM { value :: Blurry, fontSize :: Number } DemoQuery DemoSlots Void m
     eval (Focus a) = a <$ do
-      H.get >>= toString >>> single _selected >>> Focused >>> update
+      H.gets _.value >>= toString >>> single _selected >>> Focused >>> update
     eval (Reset v a) = a <$ do
       update v
+    eval (FontSize s a) = a <$ H.modify_ _ { fontSize = s }
     eval (Receive v a) = a <$ do
-      prev <- H.get
+      prev <- H.gets _.value
       let
         mentions p = contains p <<< toString
         ignore = mentions (Pattern "stop")

@@ -9,9 +9,15 @@
   "dependencies": {
     "purescript-prelude": "^4.0.0",
     "purescript-halogen": "master",
-    "purescript-textcursor": "^1.0.0"
+    "purescript-textcursor": "^1.0.0",
+    "purescript-halogen-css": "^8.0.0",
+    "purescript-numbers": "^6.0.0"
   },
   "devDependencies": {
     "purescript-psci-support": "^4.0.0"
+  },
+  "resolutions": {
+    "purescript-halogen": "master",
+    "purescript-halogen-vdom": "^4.0.0"
   }
 }
