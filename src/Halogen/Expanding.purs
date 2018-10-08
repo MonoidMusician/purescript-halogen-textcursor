@@ -113,6 +113,7 @@ testWidth input val = do
 type Settings =
   { classes :: Array H.ClassName
   , style :: CSS.CSS
+  , type_ :: HP.InputType
   , padding ::
     { focused :: Exists CSS.Size
     , blurred :: Exists CSS.Size
@@ -198,7 +199,7 @@ expandingComponent =
     render s = HH.input
       [ HP.ref label -- give it a label
       , HP.value (toString s.value) -- set the value
-      , HP.type_ InputText
+      , HP.type_ s.settings.type_
       , HP.classes s.settings.classes
       , HCSS.style do
           s.settings.style
@@ -294,6 +295,7 @@ demo =
       }
     settings s =
       { classes: []
+      , type_: HP.InputText
       , padding:
         { focused: mkExists $ 2.0 # CSS.em
         , blurred: mkExists $ 1.0 # CSS.em
