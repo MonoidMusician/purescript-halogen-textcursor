@@ -7,19 +7,12 @@ module Halogen.TextCursor
 
 import Prelude
 
+import Control.Monad.Maybe.Trans (MaybeT(..), lift, runMaybeT)
+import Data.Maybe (Maybe(..))
+import Data.Symbol (SProxy(..))
 import Effect (Effect)
 import Effect.Class (class MonadEffect)
 import Effect.Console (log)
-import Control.Monad.Maybe.Trans (MaybeT(..), lift, runMaybeT)
-import Web.Event.Event (Event)
-import Web.UIEvent.FocusEvent (toEvent) as FocusEvent
-import Web.UIEvent.MouseEvent (toEvent) as MouseEvent
-import Web.UIEvent.KeyboardEvent (toEvent) as KeyboardEvent
-import Web.Util.TextCursor (Direction(None), TextCursor(TextCursor), content)
-import Web.Util.TextCursor.Element (setTextCursor, textCursor, validate')
-import Web.Util.TextCursor.Element.Type (read, readEventTarget)
-import Data.Maybe (Maybe(..))
-import Data.Symbol (SProxy(..))
 import Halogen as H
 import Halogen.Aff (awaitBody, runHalogenAff)
 import Halogen.HTML as HH
@@ -28,6 +21,13 @@ import Halogen.HTML.Properties (InputType(..))
 import Halogen.HTML.Properties as HP
 import Halogen.VDom.Driver (runUI)
 import Unsafe.Coerce (unsafeCoerce)
+import Web.Event.Event (Event)
+import Web.UIEvent.FocusEvent (toEvent) as FocusEvent
+import Web.UIEvent.KeyboardEvent (toEvent) as KeyboardEvent
+import Web.UIEvent.MouseEvent (toEvent) as MouseEvent
+import Web.Util.TextCursor (Direction(None), TextCursor(TextCursor), content)
+import Web.Util.TextCursor.Element (setTextCursor, textCursor, validate')
+import Web.Util.TextCursor.Element.Type (read, readEventTarget)
 
 data Query a
   = Init a
@@ -55,17 +55,19 @@ textCursorComponent :: forall m.
   TCInputType ->
   H.Component HH.HTML Query TextCursor TextCursor m
 textCursorComponent typ =
-  H.component
+  H.mkComponent
     { initialState: identity
     , render
-    , eval
-    , receiver: HE.input FromOutside
-    , initializer: Just (Init unit)
-    , finalizer: Nothing
+    , eval: H.mkEval $ H.defaultEval
+      { handleAction = eval
+      , handleQuery = map pure <<< eval
+      , receive = pure <<< (#) unit <<< FromOutside
+      , initialize = Just (Init unit)
+      }
     }
   where
     label = H.RefLabel "textcursor-component" :: H.RefLabel
-    render :: TextCursor -> H.ComponentHTML Query () m
+    render :: TextCursor -> H.ComponentHTML (Query Unit) () m
     render = case toInputType typ of
       Nothing -> \tc ->
         HH.textarea
@@ -77,13 +79,13 @@ textCursorComponent typ =
           [ HP.ref label
           , HP.type_ ty
           , HP.value (content tc)
-          , HE.onInput (HE.input (Update <<< identity))
-          , HE.onClick (HE.input (Update <<< MouseEvent.toEvent))
-          , HE.onKeyUp (HE.input (Update <<< KeyboardEvent.toEvent))
-          , HE.onFocus (HE.input (Update <<< FocusEvent.toEvent))
+          , HE.onInput (pure <<< (#) unit <<< (Update <<< identity))
+          , HE.onClick (pure <<< (#) unit <<< (Update <<< MouseEvent.toEvent))
+          , HE.onKeyUp (pure <<< (#) unit <<< (Update <<< KeyboardEvent.toEvent))
+          , HE.onFocus (pure <<< (#) unit <<< (Update <<< FocusEvent.toEvent))
           ]
 
-    eval :: Query ~> H.HalogenM TextCursor Query () TextCursor m
+    eval :: Query ~> H.HalogenM TextCursor (Query Unit) () TextCursor m
     eval (Init next) = do
       tc <- H.get
       eval (FromOutside tc next)
@@ -111,13 +113,10 @@ demo :: forall m.
   MonadEffect m =>
   H.Component HH.HTML DemoQuery Unit Void m
 demo =
-  H.component
+  H.mkComponent
     { initialState: const nov
     , render
-    , eval
-    , receiver: const Nothing
-    , initializer: Nothing
-    , finalizer: Nothing
+    , eval: H.mkEval $ H.defaultEval { handleAction = eval, handleQuery = map pure <<< eval }
     }
   where
     nov = TextCursor
@@ -133,10 +132,10 @@ demo =
       TextCursor r <- H.get
       H.liftEffect $ log $ unsafeCoerce [r.before, r.selected, r.after]
 
-    render :: TextCursor -> H.ComponentHTML DemoQuery DemoSlots m
-    render tc = HH.slot (SProxy :: SProxy "tc") unit com tc (HE.input Receive)
+    render :: TextCursor -> H.ComponentHTML (DemoQuery Unit) DemoSlots m
+    render tc = HH.slot (SProxy :: SProxy "tc") unit com tc (pure <<< (#) unit <<< Receive)
 
-    eval :: DemoQuery ~> H.HalogenM TextCursor DemoQuery DemoSlots Void m
+    eval :: DemoQuery ~> H.HalogenM TextCursor (DemoQuery Unit) DemoSlots Void m
     eval (Set tc a) = a <$ do
       update tc
     eval (Receive tc a) = a <$ do

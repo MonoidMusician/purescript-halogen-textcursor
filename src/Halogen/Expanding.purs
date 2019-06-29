@@ -177,17 +177,18 @@ expandingComponent :: forall m.
   MonadEffect m =>
   H.Component HH.HTML (Free Query) (Tuple Settings Blurry) Blurry m
 expandingComponent =
-  H.component
+  H.mkComponent
     { initialState: \(Tuple settings value) ->
       { settings, value
       , focus: false
       , size: 0.0
       }
     , render
-    , eval
-    , receiver: HE.input (compose liftF <<< Input)
-    , initializer
-    , finalizer: Nothing
+    , eval: H.mkEval $ H.defaultEval
+      { receive = Just <<< (#) unit <<< (compose liftF <<< Input)
+      , handleAction = eval
+      , handleQuery = map pure <<< eval
+      }
     }
   where
     initializer :: Maybe (Free Query Unit)
@@ -195,7 +196,7 @@ expandingComponent =
       modify_ identity
       liftF (Resize unit)
     label = H.RefLabel "textcursor-component" :: H.RefLabel
-    render :: State -> H.ComponentHTML (Free Query) () m
+    render :: State -> H.ComponentHTML (Free Query Unit) () m
     render s = HH.input
       [ HP.ref label -- give it a label
       , HP.value (toString s.value) -- set the value
@@ -209,18 +210,18 @@ expandingComponent =
               else s.settings.padding.blurred
           CSS.width $ padding # runExists \(CSS.Size sz) -> CSS.Size $
             CSS.fromString ("calc(" <> show s.size <> "px + ") <> sz <> CSS.fromString ")"
-      , HE.onInput (HE.input_ (qRaising Nothing)) -- notify parent on input events
-      , HE.onInput (HE.input_ (qRaising Nothing))
-      , HE.onClick (HE.input_ (qRaising Nothing))
-      , HE.onKeyUp (HE.input_ (qRaising Nothing))
-      , HE.onFocus (HE.input_ (qRaising (Just true)))
-      , HE.onBlur (HE.input_ (qRaising (Just false)))
+      , HE.onInput (pure $ pure $ (#) unit $ (qRaising Nothing)) -- notify parent on input events
+      , HE.onInput (pure $ pure $ (#) unit $ (qRaising Nothing))
+      , HE.onClick (pure $ pure $ (#) unit $ (qRaising Nothing))
+      , HE.onKeyUp (pure $ pure $ (#) unit $ (qRaising Nothing))
+      , HE.onFocus (pure $ pure $ (#) unit $ (qRaising (Just true)))
+      , HE.onBlur (pure $ pure $ (#) unit $ (qRaising (Just false)))
       -- , HE.onKeyPress (HE.input (\e u -> PreventDefault (keyboardEventToEvent e) (NoOp u)))
       ]
 
     withEl :: forall a.
-      (TextCursorElement -> H.HalogenM State (Free Query) () Blurry m a) ->
-      H.HalogenM State (Free Query) () Blurry m (Maybe a)
+      (TextCursorElement -> H.HalogenM State (Free Query Unit) () Blurry m a) ->
+      H.HalogenM State (Free Query Unit) () Blurry m (Maybe a)
     withEl h = H.getRef label >>= obtainInputTC >>> traverse h
 
     check = withEl \el -> do
@@ -233,10 +234,10 @@ expandingComponent =
         Focused _ -> HTMLElement.focus (toHTMLElement el)
     reset = resetTo =<< H.gets _.value
 
-    eval :: Free Query ~> H.HalogenM State (Free Query) () Blurry m
+    eval :: Free Query ~> H.HalogenM State (Free Query Unit) () Blurry m
     eval a = foldFree eval1 a
 
-    eval1 :: Query ~> H.HalogenM State (Free Query) () Blurry m
+    eval1 :: Query ~> H.HalogenM State (Free Query Unit) () Blurry m
     -- When an input event occurs, get the value and notify the parent
     eval1 (PreventDefault e next) = next <$ reset
     eval1 (Get next) = H.gets _.value <#> next
@@ -275,16 +276,13 @@ demo :: forall m.
   MonadEffect m =>
   H.Component HH.HTML DemoQuery Unit Void m
 demo =
-  H.component
+  H.mkComponent
     { initialState: const
       { value: nov
       , fontSize: 15.0
       }
     , render
-    , eval
-    , receiver: const Nothing
-    , initializer: Nothing
-    , finalizer: Nothing
+    , eval: H.mkEval $ H.defaultEval { handleAction = eval, handleQuery = map pure <<< eval }
     }
   where
     nov = Focused $ TextCursor
@@ -315,7 +313,7 @@ demo =
         Focused (TextCursor r) ->
           unsafeCoerce [r.before, r.selected, r.after]
 
-    render :: { value :: Blurry, fontSize :: Number } -> H.ComponentHTML DemoQuery DemoSlots m
+    render :: { value :: Blurry, fontSize :: Number } -> H.ComponentHTML (DemoQuery Unit) DemoSlots m
     render s = HH.div_
       [ HH.input
         [ HP.type_ InputRange, HP.value (show s.fontSize)
@@ -325,11 +323,11 @@ demo =
       , HH.br_
       , HH.slot (SProxy :: SProxy "tc") unit expandingComponent
           ((Tuple <$> settings <*> _.value) s)
-          (HE.input Receive)
-      , HH.button [ HE.onClick (HE.input_ Focus) ] [ HH.text "Focus" ]
+          (Just <<< H.tell <<< Receive)
+      , HH.button [ HE.onClick (pure $ pure $ H.tell Focus) ] [ HH.text "Focus" ]
       ]
 
-    eval :: DemoQuery ~> H.HalogenM { value :: Blurry, fontSize :: Number } DemoQuery DemoSlots Void m
+    eval :: DemoQuery ~> H.HalogenM { value :: Blurry, fontSize :: Number } (DemoQuery Unit) DemoSlots Void m
     eval (Focus a) = a <$ do
       H.gets _.value >>= toString >>> single _selected >>> Focused >>> update
     eval (Reset v a) = a <$ do
